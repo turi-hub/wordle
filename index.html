@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wordle Personalizado — BALNEARIO</title>
+<style>
+  :root{
+    --bg:#0f172a; --ink:#e5e7eb; --muted:#94a3b8;
+    --tile:#1f2937; --abs:#334155; --pres:#eab308; --ok:#22c55e; --kbd:#111827;
+    --accent:#7c3aed;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,Segoe UI,Roboto,Ubuntu,Arial}
+  .wrap{max-width:680px;margin:24px auto;padding:0 16px; text-align:center}
+  h1{font-size:24px;margin:8px 0 2px}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 14px}
+  .board{display:grid;gap:8px;justify-content:center;margin:18px 0}
+  .row{display:grid;gap:8px}
+  .cell{
+    width:52px;height:52px;border:2px solid #475569;border-radius:6px;
+    display:flex;align-items:center;justify-content:center;
+    font-weight:800;font-size:22px;text-transform:uppercase;
+    background:var(--tile); color:#fff;
+  }
+  .cell.filled{border-color:#94a3b8}
+  .cell.absent{background:var(--abs);border-color:var(--abs)}
+  .cell.present{background:var(--pres);border-color:var(--pres)}
+  .cell.correct{background:var(--ok);border-color:var(--ok)}
+  .kbd{display:grid;gap:8px;justify-content:center;margin:6px 0 10px}
+  .kbd .rowkbd{display:flex;gap:6px;justify-content:center;flex-wrap:wrap}
+  .key{
+    background:var(--kbd); color:#fff; border:none; border-radius:8px;
+    padding:10px 10px; min-width:34px; font-weight:700; cursor:pointer;
+    touch-action:manipulation;
+  }
+  .key.wide{min-width:74px}
+  .key.absent{background:#334155}
+  .key.present{background:var(--pres); color:#1a1a1a}
+  .key.correct{background:var(--ok); color:#0b3d17}
+  .msg{min-height:22px;margin:10px 0;color:var(--muted)}
+  .top{display:flex;gap:8px;justify-content:center;align-items:center;flex-wrap:wrap}
+  .btn{background:var(--accent); color:#fff; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; font-weight:700}
+  .confetti{
+    height:8px; margin:12px auto; border-radius:4px; max-width:480px;
+    background:repeating-linear-gradient(90deg,#ff6b6b 0 12px,#ffd166 12px 24px,#06d6a0 24px 36px,#60a5fa 36px 48px,#a78bfa 48px 60px);
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>🎉 Wordle Personalizado</h1>
+    <p class="sub">Palabra fija (con o sin tildes). 6 intentos. Teclado físico o en pantalla.</p>
+
+    <div class="confetti"></div>
+
+    <div class="top">
+      <button class="btn" id="btnShare" title="Copiar cuadraditos del resultado" disabled>Compartir resultado</button>
+      <span class="msg" id="status">Adivina la palabra…</span>
+    </div>
+
+    <div id="board" class="board"></div>
+    <div class="kbd" id="kbd"></div>
+  </div>
+
+<script>
+(() => {
+  // ===== Utils =====
+  const $ = sel => document.querySelector(sel);
+  const $$ = sel => Array.from(document.querySelectorAll(sel));
+  const norm = s => removeDiacritics(String(s).toLowerCase().trim());
+  function removeDiacritics(str){
+    try{
+      return str.normalize('NFD').replace(/\p{Diacritic}/gu,'');
+    }catch(e){
+      return str
+        .replace(/[áàäâ]/gi,'a').replace(/[éèëê]/gi,'e')
+        .replace(/[íìïî]/gi,'i').replace(/[óòöô]/gi,'o')
+        .replace(/[úùüû]/gi,'u').replace(/ñ/gi,'ñ');
+    }
+  }
+
+  // ===== Game State =====
+  const FIXED_SOLUTION = "balneario"; // <- solución fija
+  let solutionRaw = "";      // como la escribimos
+  let solution = "";         // normalizada
+  let L = 5;
+  let maxTries = 6;
+  let row = 0, col = 0;
+  let grid = [];
+  let states = [];
+  let finished = false;
+  let sharePattern = [];
+
+  // ===== UI Build =====
+  function buildBoard(){
+    const board = $("#board");
+    board.innerHTML = "";
+    board.style.gridTemplateRows = `repeat(${maxTries}, 1fr)`;
+    grid = Array.from({length:maxTries}, () => Array(L).fill(""));
+    states = Array.from({length:maxTries}, () => Array(L).fill(""));
+    sharePattern = [];
+    for(let r=0;r<maxTries;r++){
+      const rowDiv = document.createElement('div');
+      rowDiv.className = 'row';
+      rowDiv.style.gridTemplateColumns = `repeat(${L}, 52px)`;
+      for(let c=0;c<L;c++){
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        cell.id = `cell-${r}-${c}`;
+        rowDiv.appendChild(cell);
+      }
+      board.appendChild(rowDiv);
+    }
+    $("#status").textContent = `Adivina la palabra de ${L} letras • Intento 1/${maxTries}`;
+    $("#btnShare").disabled = true;
+  }
+
+  function buildKeyboard(){
+    const layout = [
+      "Q W E R T Y U I O P",
+      "A S D F G H J K L Ñ",
+      "Z X C V B N M ⌫ ENTER"
+    ];
+    const kb = $("#kbd");
+    kb.innerHTML = "";
+    layout.forEach(line=>{
+      const rowK = document.createElement('div');
+      rowK.className = 'rowkbd';
+      line.split(' ').forEach(k=>{
+        const btn = document.createElement('button');
+        btn.className = 'key';
+        btn.textContent = k;
+        if(k==="ENTER") btn.classList.add('wide');
+        if(k==="⌫") btn.classList.add('wide');
+        btn.addEventListener('click', ()=>handleKey(k));
+        rowK.appendChild(btn);
+      });
+      kb.appendChild(rowK);
+    });
+  }
+
+  function paintCell(r,c){
+    const cell = $(`#cell-${r}-${c}`);
+    cell.textContent = grid[r][c] || "";
+    cell.classList.toggle('filled', !!grid[r][c]);
+    const st = states[r][c];
+    ["absent","present","correct"].forEach(x=>cell.classList.remove(x));
+    if(st) cell.classList.add(st);
+  }
+
+  function setKeyState(letter, state){
+    const btn = $$("#kbd .key").find(b => b.textContent.toLowerCase()===letter.toLowerCase());
+    if(!btn) return;
+    const order = {absent:1, present:2, correct:3};
+    const cur = btn.dataset.state;
+    if(!cur || order[state] > order[cur]){
+      btn.dataset.state = state;
+      btn.classList.remove('absent','present','correct');
+      btn.classList.add(state);
+    }
+  }
+
+  // ===== Input Handling =====
+  function handleKey(k){
+    if(finished) return;
+    if(k==="ENTER") { submitRow(); return; }
+    if(k==="⌫" || k==="Backspace"){ backspace(); return; }
+    if(k.length===1 && /[A-Za-zÑñÁÉÍÓÚÜáéíóúü]/.test(k)){
+      addLetter(k);
+    }
+  }
+  document.addEventListener('keydown', (e)=>{
+    if(finished) return;
+    if(e.key==="Enter"){ submitRow(); }
+    else if(e.key==="Backspace"){ backspace(); }
+    else if(/^[a-zA-ZñÑáéíóúüÁÉÍÓÚÜ]$/.test(e.key)){ addLetter(e.key); }
+  }, {passive:true});
+
+  function addLetter(ch){
+    if(col>=L) return;
+    grid[row][col] = ch.toUpperCase();
+    paintCell(row,col);
+    col++;
+  }
+  function backspace(){
+    if(col<=0) return;
+    col--;
+    grid[row][col] = "";
+    paintCell(row,col);
+  }
+
+  // ===== Evaluation =====
+  function submitRow(){
+    if(col<L){ flash(`Faltan letras (${L})`); return; }
+    const guessRaw = grid[row].join('');
+    const guess = norm(guessRaw);
+    if(guess.length!==L){ flash("Longitud inválida"); return; }
+
+    const solArr = solution.split('');
+    const guessArr = guess.split('');
+    const result = Array(L).fill('absent');
+    const count = {};
+    for(let i=0;i<L;i++){
+      if(guessArr[i]===solArr[i]){
+        result[i]='correct';
+      }else{
+        count[solArr[i]] = (count[solArr[i]]||0)+1;
+      }
+    }
+    for(let i=0;i<L;i++){
+      if(result[i]==='correct') continue;
+      const g = guessArr[i];
+      if(count[g]>0){
+        result[i]='present';
+        count[g]--;
+      }
+    }
+    for(let i=0;i<L;i++){
+      states[row][i]=result[i];
+      paintCell(row,i);
+      setKeyState(grid[row][i], result[i]);
+    }
+    sharePattern.push(result.map(s=> s==='correct'?'🟩':(s==='present'?'🟨':'⬛')).join(''));
+
+    if(result.every(x=>x==='correct')){
+      finished = true;
+      $("#status").textContent = `¡Exacto! ${row+1}/${maxTries}`;
+      $("#btnShare").disabled = false;
+      return;
+    }
+    row++;
+    col=0;
+    if(row>=maxTries){
+      finished = true;
+      $("#status").textContent = `Se acabó. La palabra era: ${solutionRaw.toUpperCase()}`;
+      $("#btnShare").disabled = false;
+      return;
+    }
+    $("#status").textContent = `Intento ${row+1}/${maxTries}`;
+  }
+
+  function flash(t){ $("#status").textContent = t; }
+
+  // ===== Start fixed game =====
+  function startFixed(){
+    solutionRaw = FIXED_SOLUTION.trim();
+    solution = norm(solutionRaw);
+    L = solution.length;          // "balneario" = 9 letras
+    maxTries = 6;
+    row = 0; col = 0; finished=false;
+    buildBoard();
+    buildKeyboard();
+    $("#status").textContent = `Adivina la palabra de ${L} letras • Intento 1/${maxTries}`;
+  }
+
+  $("#btnShare").addEventListener('click', async ()=>{
+    const title = "Wordle Personalizado";
+    const lines = sharePattern.join('\n');
+    const triesUsed = sharePattern.length;
+    const solved = sharePattern.length && sharePattern[sharePattern.length-1].split('').every(x=>x==='🟩');
+    const header = solved ? `${title}: ${triesUsed}/${maxTries}` : `${title}: X/${maxTries}`;
+    const text = `${header}\n${lines}`;
+    try{
+      await navigator.clipboard.writeText(text);
+      flash("Resultado copiado al portapapeles ✅");
+    }catch(e){
+      flash("No se pudo copiar automáticamente. Selecciona y copia manualmente.");
+      console.log(text);
+    }
+  });
+
+  // Init
+  startFixed();
+})();
+</script>
+</body>
+</html>
+
