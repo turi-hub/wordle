@@ -65,6 +65,9 @@
 
 <script>
 (() => {
+  // ===== Config webhook =====
+  const WEBHOOK_URL = "https://primary-production-1fb0.up.railway.app/webhook/aba02f04-46f8-4b4a-bc2e-059b2ed95999";
+
   // ===== Utils =====
   const $ = sel => document.querySelector(sel);
   const $$ = sel => Array.from(document.querySelectorAll(sel));
@@ -82,8 +85,8 @@
 
   // ===== Game State =====
   const FIXED_SOLUTION = "balneario"; // <- solución fija
-  let solutionRaw = "";      // como la escribimos
-  let solution = "";         // normalizada
+  let solutionRaw = "";
+  let solution = "";
   let L = 5;
   let maxTries = 6;
   let row = 0, col = 0;
@@ -91,6 +94,7 @@
   let states = [];
   let finished = false;
   let sharePattern = [];
+  let guesses = []; // <-- guardamos cada intento escrito
 
   // ===== UI Build =====
   function buildBoard(){
@@ -100,6 +104,7 @@
     grid = Array.from({length:maxTries}, () => Array(L).fill(""));
     states = Array.from({length:maxTries}, () => Array(L).fill(""));
     sharePattern = [];
+    guesses = [];
     for(let r=0;r<maxTries;r++){
       const rowDiv = document.createElement('div');
       rowDiv.className = 'row';
@@ -190,12 +195,39 @@
     paintCell(row,col);
   }
 
+  // ===== Webhook sender (on success) =====
+  async function sendSolvedWebhook(attempts){
+    try{
+      const payload = {
+        event: "wordle_solved",
+        solution: solutionRaw,
+        attempts,              // intentos usados
+        maxTries,
+        pattern: sharePattern, // líneas de 🟩🟨⬛
+        guesses,               // palabras probadas (en mayúsculas)
+        finishedAtISO: new Date().toISOString(),
+        userAgent: navigator.userAgent,
+        pageURL: location.href
+      };
+      await fetch(WEBHOOK_URL, {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify(payload)
+      });
+    } catch(e){
+      // No rompemos la UX si falla el webhook; lo dejamos en consola
+      console.warn("Webhook error:", e);
+    }
+  }
+
   // ===== Evaluation =====
   function submitRow(){
     if(col<L){ flash(`Faltan letras (${L})`); return; }
-    const guessRaw = grid[row].join('');
-    const guess = norm(guessRaw);
+    const guessRaw = grid[row].join('');     // en MAYÚSCULAS tal como se ve
+    const guess = norm(guessRaw);            // normalizada
     if(guess.length!==L){ flash("Longitud inválida"); return; }
+
+    guesses.push(guessRaw); // guardamos el intento mostrado al usuario
 
     const solArr = solution.split('');
     const guessArr = guess.split('');
@@ -225,8 +257,12 @@
 
     if(result.every(x=>x==='correct')){
       finished = true;
-      $("#status").textContent = `¡Exacto! ${row+1}/${maxTries}`;
+      const attemptsUsed = row+1;
+      $("#status").textContent = `¡Exacto! ${attemptsUsed}/${maxTries}`;
       $("#btnShare").disabled = false;
+
+      // ====> Enviar webhook al acertar
+      sendSolvedWebhook(attemptsUsed);
       return;
     }
     row++;
@@ -276,4 +312,3 @@
 </script>
 </body>
 </html>
-
